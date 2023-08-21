@@ -18,6 +18,7 @@ import (
 )
 
 const strFmt = "%-3s | %-38s | %-80s\n"
+const maxJobs = 20
 
 var opts struct {
 	initial string
@@ -55,6 +56,11 @@ var cmd = &cobra.Command{
 		data, err := json.MarshalIndent(spec, "", "  ")
 		if err != nil {
 			fmt.Printf("Error converting spec to JSON: %v\n", err)
+			os.Exit(1)
+		}
+
+		if opts.num > maxJobs {
+			fmt.Printf("Aborting since %d exceeds max value of --n which is %d\n", opts.num, maxJobs)
 			os.Exit(1)
 		}
 
@@ -101,7 +107,7 @@ func NewCommand() *cobra.Command {
 	cmd.Flags().StringVarP(&opts.latest, "latest", "l", "", "Latest image")
 	cmd.Flags().StringVarP(&opts.jobName, "job-name", "j", "", "Job name")
 	cmd.Flags().StringVarP(&opts.apiURL, "api-url", "u", "", "API URL")
-	cmd.Flags().IntVarP(&opts.num, "n", "n", 1, "Number of times to launch the job")
+	cmd.Flags().IntVarP(&opts.num, "n", "n", 1, fmt.Sprintf("Number of times to launch the job (max is %d)", maxJobs))
 
 	return cmd
 }
