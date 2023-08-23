@@ -31,13 +31,12 @@ var opts struct {
 var cmd = &cobra.Command{
 	Use:   "mycli",
 	Short: "CLI tool to call an API",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		// Get the MY_APPCI_TOKEN environment variable
 		appCIToken := os.Getenv("MY_APPCI_TOKEN")
 		if appCIToken == "" {
-			fmt.Println("Error: Cluster token required.  Please set the MY_APPCI_TOKEN variable.")
-			cmd.Usage()
-			os.Exit(1)
+			cmd.Usage() //nolint
+			return fmt.Errorf("cluster token required; please set the MY_APPCI_TOKEN variable")
 		}
 
 		// Parse image spec
@@ -55,13 +54,11 @@ var cmd = &cobra.Command{
 		// debug it.
 		data, err := json.MarshalIndent(spec, "", "  ")
 		if err != nil {
-			fmt.Printf("Error converting spec to JSON: %v\n", err)
-			os.Exit(1)
+			return err
 		}
 
 		if opts.num > maxJobs {
-			fmt.Printf("Aborting since %d exceeds max value of --n which is %d\n", opts.num, maxJobs)
-			os.Exit(1)
+			return fmt.Errorf("aborting since %d exceeds max value of --n which is %d", opts.num, maxJobs)
 		}
 
 		fmt.Println(string(data))
@@ -73,24 +70,22 @@ var cmd = &cobra.Command{
 			// Make the HTTP request
 			resp, err := launchJob(appCIToken, opts.apiURL, data)
 			if err != nil {
-				fmt.Printf("error launching job: %v", err)
-				os.Exit(1)
+				return err
 			}
-			defer resp.Body.Close()
 
 			var jobInfo struct {
 				ID string `json:"id"`
 			}
 			if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
-				fmt.Printf("error decoding response JSON from gangway api call: %v", err)
-				os.Exit(1)
+				resp.Body.Close() //nolint
+				return err
 			}
+			resp.Body.Close() //nolint
 
 			// Get the job URL from prow easy access
 			jobURL, err := getJobURL(jobInfo.ID)
 			if err != nil {
-				fmt.Printf("error running getJobURL: %v", err)
-				os.Exit(1)
+				return err
 			}
 
 			// Print job info in tabular format
@@ -99,6 +94,8 @@ var cmd = &cobra.Command{
 			// Sleep to avoid hitting the api too hard
 			time.Sleep(time.Second)
 		}
+
+		return nil
 	},
 }
 
@@ -147,12 +144,13 @@ func getJobURL(jobID string) (string, error) {
 			time.Sleep(retryDelay)
 			continue
 		}
-		defer resp.Body.Close()
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
+			resp.Body.Close()
 			return "", fmt.Errorf("error reading response body: %v", err)
 		}
+		resp.Body.Close()
 
 		// Search YAML document parts to find the section with status.url
 		documents := strings.Split(string(body), "---")
@@ -171,8 +169,6 @@ func getJobURL(jobID string) (string, error) {
 		}
 
 		if statusURL == "" {
-			// This seems to happen all the time, comment it out so the output looks nice
-			//fmt.Printf("Attempt %d: status.url is empty, retrying\n", attempts+1)
 			time.Sleep(retryDelay)
 			continue
 		}

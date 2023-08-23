@@ -8,8 +8,8 @@ import (
 )
 
 func main() {
-	cmd := cmd.NewCommand()
-	if err := cmd.Execute(); err != nil {
+	rootCmd := cmd.NewCommand()
+	if err := rootCmd.Execute(); err != nil {
 		fmt.Printf("%+v", err)
 		os.Exit(1)
 	}
