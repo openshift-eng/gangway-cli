@@ -1,4 +1,4 @@
-module github.com/stbenjam/gangway-cli
+module github.com/openshift-eng/gangway-cli
 
 go 1.20
 

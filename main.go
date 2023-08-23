@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/stbenjam/gangway-cli/cmd"
+	"github.com/openshift-eng/gangway-cli/cmd"
 )
 
 func main() {

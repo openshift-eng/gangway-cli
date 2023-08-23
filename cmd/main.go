@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
 
-	"github.com/stbenjam/gangway-cli/pkg/api"
+	"github.com/openshift-eng/gangway-cli/pkg/api"
 )
 
 const strFmt = "%-3s | %-38s | %-80s\n"
