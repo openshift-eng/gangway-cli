@@ -21,11 +21,12 @@ const strFmt = "%-3s | %-38s | %-80s\n"
 const maxJobs = 20
 
 var opts struct {
-	initial string
-	latest  string
-	jobName string
-	apiURL  string
-	num     int
+	initial      string
+	latest       string
+	envVariables []string
+	jobName      string
+	apiURL       string
+	num          int
 }
 
 var cmd = &cobra.Command{
@@ -48,6 +49,16 @@ var cmd = &cobra.Command{
 					"RELEASE_IMAGE_LATEST":  opts.latest,
 				},
 			},
+		}
+
+		// Add environment variables
+		for _, envVar := range opts.envVariables {
+			splitVar := strings.SplitN(envVar, "=", 2)
+			if len(splitVar) != 2 {
+				cmd.Usage() //nolint
+				return fmt.Errorf("invalid environment variable, should be in format of VAR=VALUE: %q", envVar)
+			}
+			spec.PodSpecOptions.Envs[splitVar[0]] = splitVar[1]
 		}
 
 		// Convert image spec to JSON and pretty print in case someone needs to
@@ -102,6 +113,7 @@ var cmd = &cobra.Command{
 func NewCommand() *cobra.Command {
 	cmd.Flags().StringVarP(&opts.initial, "initial", "i", "", "Initial image")
 	cmd.Flags().StringVarP(&opts.latest, "latest", "l", "", "Latest image")
+	cmd.Flags().StringArrayVarP(&opts.envVariables, "env", "e", nil, "Environment variables, VAR=VALUE")
 	cmd.Flags().StringVarP(&opts.jobName, "job-name", "j", "", "Job name")
 	cmd.Flags().StringVarP(&opts.apiURL, "api-url", "u", "", "API URL")
 	cmd.Flags().IntVarP(&opts.num, "n", "n", 1, fmt.Sprintf("Number of times to launch the job (max is %d)", maxJobs))
