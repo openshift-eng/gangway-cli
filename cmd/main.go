@@ -20,6 +20,13 @@ import (
 const strFmt = "%-3s | %-38s | %-80s\n"
 const maxJobs = 20
 
+// JobRunIdentifier is mirrored to https://github.com/openshift/ci-tools/blob/91aeed7425cb6738b6e36e7f511787b55c9e5267/pkg/jobrunaggregator/jobrunaggregatorlib/util.go#L43
+// the output of this command can be fed into ci-tools aggregation commands for further analysis
+type JobRunIdentifier struct {
+	JobName  string
+	JobRunID string
+}
+
 var opts struct {
 	initial      string
 	latest       string
@@ -27,6 +34,7 @@ var opts struct {
 	jobName      string
 	apiURL       string
 	num          int
+	jobsFilePath string
 }
 
 var cmd = &cobra.Command{
@@ -36,7 +44,7 @@ var cmd = &cobra.Command{
 		// Get the MY_APPCI_TOKEN environment variable
 		appCIToken := os.Getenv("MY_APPCI_TOKEN")
 		if appCIToken == "" {
-			cmd.Usage() //nolint
+			cmd.Usage() // nolint
 			return fmt.Errorf("cluster token required; please set the MY_APPCI_TOKEN variable")
 		}
 
@@ -55,7 +63,7 @@ var cmd = &cobra.Command{
 		for _, envVar := range opts.envVariables {
 			splitVar := strings.SplitN(envVar, "=", 2)
 			if len(splitVar) != 2 {
-				cmd.Usage() //nolint
+				cmd.Usage() // nolint
 				return fmt.Errorf("invalid environment variable, should be in format of VAR=VALUE: %q", envVar)
 			}
 			spec.PodSpecOptions.Envs[splitVar[0]] = splitVar[1]
@@ -71,6 +79,8 @@ var cmd = &cobra.Command{
 		if opts.num > maxJobs {
 			return fmt.Errorf("aborting since %d exceeds max value of --n which is %d", opts.num, maxJobs)
 		}
+
+		var jobRunIdentifiers = make([]JobRunIdentifier, 0)
 
 		fmt.Println(string(data))
 
@@ -88,16 +98,22 @@ var cmd = &cobra.Command{
 				ID string `json:"id"`
 			}
 			if err := json.NewDecoder(resp.Body).Decode(&jobInfo); err != nil {
-				resp.Body.Close() //nolint
+				resp.Body.Close() // nolint
 				return err
 			}
-			resp.Body.Close() //nolint
+			resp.Body.Close() // nolint
 
 			// Get the job URL from prow easy access
-			jobURL, err := getJobURL(jobInfo.ID)
+			jobURL, buildID, err := getJobURL(jobInfo.ID)
 			if err != nil {
 				return err
 			}
+
+			jobRunIdentifier := JobRunIdentifier{
+				JobName:  opts.jobName,
+				JobRunID: buildID,
+			}
+			jobRunIdentifiers = append(jobRunIdentifiers, jobRunIdentifier)
 
 			// Print job info in tabular format
 			fmt.Printf(strFmt, strconv.Itoa(i+1), jobInfo.ID, jobURL)
@@ -105,6 +121,8 @@ var cmd = &cobra.Command{
 			// Sleep to avoid hitting the api too hard
 			time.Sleep(time.Second)
 		}
+
+		outputJobRunIdentifiers(opts.jobsFilePath, jobRunIdentifiers)
 
 		return nil
 	},
@@ -117,6 +135,7 @@ func NewCommand() *cobra.Command {
 	cmd.Flags().StringVarP(&opts.jobName, "job-name", "j", "", "Job name")
 	cmd.Flags().StringVarP(&opts.apiURL, "api-url", "u", "", "API URL")
 	cmd.Flags().IntVarP(&opts.num, "n", "n", 1, fmt.Sprintf("Number of times to launch the job (max is %d)", maxJobs))
+	cmd.Flags().StringVarP(&opts.jobsFilePath, "jobs-file-path", "p", "", "Save JobRunIdentifier JSON in the specified file path")
 
 	return cmd
 }
@@ -143,7 +162,7 @@ func launchJob(appCIToken, apiURL string, data []byte) (*http.Response, error) {
 
 // getJobURL gets the url from prow so the user has a place to browse to see the
 // status of the prow job.  Prow does not immediately have the prow job so we wait.
-func getJobURL(jobID string) (string, error) {
+func getJobURL(jobID string) (string, string, error) {
 	const maxAttempts = 5
 	const retryDelay = time.Second
 	url := "https://prow.ci.openshift.org/prowjob?prowjob=" + jobID
@@ -160,22 +179,27 @@ func getJobURL(jobID string) (string, error) {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			resp.Body.Close()
-			return "", fmt.Errorf("error reading response body: %v", err)
+			return "", "", fmt.Errorf("error reading response body: %v", err)
 		}
 		resp.Body.Close()
 
 		// Search YAML document parts to find the section with status.url
 		documents := strings.Split(string(body), "---")
-		var statusURL string
+		var statusURL, buildID string
 		for _, doc := range documents {
 			var jobInfo map[string]interface{}
 			if err := yaml.Unmarshal([]byte(doc), &jobInfo); err != nil {
 				continue
 			}
 			if status, ok := jobInfo["status"].(map[interface{}]interface{}); ok {
+
+				// try to get the build_id as well
+				// but only return when we have a valid URL
+				buildID = status["build_id"].(string)
+
 				if url, ok := status["url"].(string); ok {
 					statusURL = url
-					return statusURL, nil
+					return statusURL, buildID, nil
 				}
 			}
 		}
@@ -184,7 +208,36 @@ func getJobURL(jobID string) (string, error) {
 			time.Sleep(retryDelay)
 			continue
 		}
-		return statusURL, nil
+		return statusURL, buildID, nil
 	}
-	return "", fmt.Errorf("status.url not found in response after %d retries", maxAttempts)
+	return "", "", fmt.Errorf("status.url not found in response after %d retries", maxAttempts)
+}
+
+func outputJobRunIdentifiers(jobsFilePath string, jobRunIdentifiers []JobRunIdentifier) {
+
+	fileName := fmt.Sprintf("gangway_%s_%s.json", opts.jobName, time.Now().Format(time.RFC3339Nano))
+	output, err := json.Marshal(jobRunIdentifiers)
+	if err != nil {
+		fmt.Printf("Failed to marshal JSON for JobRunIdentifiers: %v", err)
+	} else {
+
+		// check to see if we end with path separator
+		// if so set it to empty string
+		delimiter := string(os.PathSeparator)
+		if len(opts.jobsFilePath) > 0 {
+			if strings.HasSuffix(jobsFilePath, delimiter) {
+				delimiter = ""
+			}
+			err := os.MkdirAll(jobsFilePath, os.ModePerm)
+			if err != nil {
+				fmt.Printf("Error creating directory: %v", err)
+			} else {
+				err := os.WriteFile(fmt.Sprintf("%s%s%s", jobsFilePath, delimiter, fileName), output, os.ModePerm)
+				if err != nil {
+					fmt.Printf("Error writing file: %v", err)
+				}
+			}
+		}
+	}
+
 }
