@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/wait"
+
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
 
@@ -27,6 +29,12 @@ type JobRunIdentifier struct {
 	JobRunID string
 }
 
+type JobStatus struct {
+	BuildID string
+	JobURL  string
+	JobID   string
+}
+
 var opts struct {
 	initial      string
 	latest       string
@@ -35,6 +43,13 @@ var opts struct {
 	apiURL       string
 	num          int
 	jobsFilePath string
+}
+
+var backoff = wait.Backoff{
+	Duration: 10 * time.Second,
+	Jitter:   0,
+	Factor:   2,
+	Steps:    100,
 }
 
 var cmd = &cobra.Command{
@@ -104,19 +119,31 @@ var cmd = &cobra.Command{
 			resp.Body.Close() // nolint
 
 			// Get the job URL from prow easy access
-			jobURL, buildID, err := getJobURL(jobInfo.ID)
+			jobStatus := JobStatus{JobID: jobInfo.ID}
+			err = wait.ExponentialBackoff(backoff, func() (done bool, err error) {
+				err2 := jobStatus.getJobURL()
+				if err2 != nil {
+					return false, err2
+				}
+				if len(jobStatus.JobURL) == 0 {
+					fmt.Println("Empty job URL will attempt retry")
+					return false, nil
+				}
+				return true, nil
+			})
+
 			if err != nil {
 				return err
 			}
 
 			jobRunIdentifier := JobRunIdentifier{
 				JobName:  opts.jobName,
-				JobRunID: buildID,
+				JobRunID: jobStatus.BuildID,
 			}
 			jobRunIdentifiers = append(jobRunIdentifiers, jobRunIdentifier)
 
 			// Print job info in tabular format
-			fmt.Printf(strFmt, strconv.Itoa(i+1), jobInfo.ID, jobURL)
+			fmt.Printf(strFmt, strconv.Itoa(i+1), jobInfo.ID, jobStatus.JobURL)
 
 			// Sleep to avoid hitting the api too hard
 			time.Sleep(time.Second)
@@ -134,7 +161,7 @@ func NewCommand() *cobra.Command {
 	cmd.Flags().StringArrayVarP(&opts.envVariables, "env", "e", nil, "Environment variables, VAR=VALUE")
 	cmd.Flags().StringVarP(&opts.jobName, "job-name", "j", "", "Job name")
 	cmd.Flags().StringVarP(&opts.apiURL, "api-url", "u", "", "API URL")
-	cmd.Flags().IntVarP(&opts.num, "n", "n", 1, fmt.Sprintf("Number of times to launch the job (max is %d)", maxJobs))
+	cmd.Flags().IntVarP(&opts.num, "num-jobs", "n", 1, fmt.Sprintf("Number of times to launch the job (max is %d)", maxJobs))
 	cmd.Flags().StringVarP(&opts.jobsFilePath, "jobs-file-path", "p", "", "Save JobRunIdentifier JSON in the specified file path")
 
 	return cmd
@@ -162,55 +189,47 @@ func launchJob(appCIToken, apiURL string, data []byte) (*http.Response, error) {
 
 // getJobURL gets the url from prow so the user has a place to browse to see the
 // status of the prow job.  Prow does not immediately have the prow job so we wait.
-func getJobURL(jobID string) (string, string, error) {
-	const maxAttempts = 5
-	const retryDelay = time.Second
-	url := "https://prow.ci.openshift.org/prowjob?prowjob=" + jobID
+func (j *JobStatus) getJobURL() error {
+	url := "https://prow.ci.openshift.org/prowjob?prowjob=" + j.JobID
 	var resp *http.Response
 	var err error
-	for attempts := 0; attempts < maxAttempts; attempts++ {
-		resp, err = http.Get(url)
-		if err != nil {
-			fmt.Printf("Attempt %d: Error getting job URL: %v\n", attempts+1, err)
-			time.Sleep(retryDelay)
-			continue
-		}
 
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			resp.Body.Close()
-			return "", "", fmt.Errorf("error reading response body: %v", err)
-		}
-		resp.Body.Close()
-
-		// Search YAML document parts to find the section with status.url
-		documents := strings.Split(string(body), "---")
-		var statusURL, buildID string
-		for _, doc := range documents {
-			var jobInfo map[string]interface{}
-			if err := yaml.Unmarshal([]byte(doc), &jobInfo); err != nil {
-				continue
-			}
-			if status, ok := jobInfo["status"].(map[interface{}]interface{}); ok {
-
-				// try to get the build_id as well
-				// but only return when we have a valid URL
-				buildID = status["build_id"].(string)
-
-				if url, ok := status["url"].(string); ok {
-					statusURL = url
-					return statusURL, buildID, nil
-				}
-			}
-		}
-
-		if statusURL == "" {
-			time.Sleep(retryDelay)
-			continue
-		}
-		return statusURL, buildID, nil
+	resp, err = http.Get(url)
+	if err != nil {
+		fmt.Printf("Error getting job URL: %v\n", err)
+		return nil
 	}
-	return "", "", fmt.Errorf("status.url not found in response after %d retries", maxAttempts)
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		resp.Body.Close()
+		return fmt.Errorf("error reading response body: %v", err)
+	}
+	resp.Body.Close()
+
+	// Search YAML document parts to find the section with status.url
+	documents := strings.Split(string(body), "---")
+	for _, doc := range documents {
+		var jobInfo map[string]interface{}
+		if err := yaml.Unmarshal([]byte(doc), &jobInfo); err != nil {
+			continue
+		}
+		if status, ok := jobInfo["status"].(map[interface{}]interface{}); ok {
+
+			// try to get the build_id as well
+			// but only return when we have a valid URL
+			if bid, ok := status["build_id"]; ok {
+				j.BuildID = bid.(string)
+			}
+
+			if url, ok := status["url"]; ok {
+				j.JobURL = url.(string)
+				return nil
+			}
+		}
+	}
+
+	return nil
 }
 
 func outputJobRunIdentifiers(jobsFilePath string, jobRunIdentifiers []JobRunIdentifier) {
@@ -224,7 +243,7 @@ func outputJobRunIdentifiers(jobsFilePath string, jobRunIdentifiers []JobRunIden
 		// check to see if we end with path separator
 		// if so set it to empty string
 		delimiter := string(os.PathSeparator)
-		if len(opts.jobsFilePath) > 0 {
+		if len(jobsFilePath) > 0 {
 			if strings.HasSuffix(jobsFilePath, delimiter) {
 				delimiter = ""
 			}

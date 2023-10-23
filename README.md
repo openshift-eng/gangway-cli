@@ -29,7 +29,7 @@ $ ./gangway-cli \
     --initial "registry.ci.openshift.org/ocp/release:4.14.0-0.nightly-2023-07-05-071214" \
     --latest "registry.ci.openshift.org/ocp/release:4.14.0-0.nightly-2023-07-05-071214" \
     --job-name periodic-ci-openshift-release-master-ci-4.15-upgrade-from-stable-4.14-e2e-aws-ovn-upgrade \
-    --n 10 \
+    --num-jobs 10 \
     --jobs-file-path="/path/to/results/for/gangway/"
 ```
 
