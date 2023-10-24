@@ -145,8 +145,11 @@ var cmd = &cobra.Command{
 			// Print job info in tabular format
 			fmt.Printf(strFmt, strconv.Itoa(i+1), jobInfo.ID, jobStatus.JobURL)
 
-			// Sleep to avoid hitting the api too hard
-			time.Sleep(time.Second)
+			// if we are going to kick off another run
+			// sleep to avoid hitting the api too hard
+			if i < opts.num-1 {
+				time.Sleep(time.Second)
+			}
 		}
 
 		outputJobRunIdentifiers(opts.jobsFilePath, jobRunIdentifiers)
