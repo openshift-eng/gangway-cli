@@ -186,6 +186,9 @@ func launchJob(appCIToken, apiURL string, data []byte) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error making HTTP request to gangway api: %v", err)
 	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected response code from gangway api: %q", resp.Status)
+	}
 
 	return resp, nil
 }
