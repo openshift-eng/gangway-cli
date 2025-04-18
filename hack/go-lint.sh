@@ -20,6 +20,6 @@ else
   $DOCKER run --rm \
     --volume "${PWD}:/go/src/github.com/openshift-eng/gangway-cli:z" \
     --workdir /go/src/github.com/openshift-eng/gangway-cli \
-    docker.io/golangci/golangci-lint:v1.52 \
+    docker.io/golangci/golangci-lint:v1.60.1 \
     golangci-lint "${@}"
 fi
