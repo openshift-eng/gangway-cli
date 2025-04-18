@@ -190,6 +190,14 @@ func launchJob(appCIToken, apiURL string, data []byte) (*http.Response, error) {
 		return nil, fmt.Errorf("unexpected response code from gangway api: %q", resp.Status)
 	}
 
+	// If gangway returns anything than 200, 201, etc bubble up the error
+	if resp.StatusCode > 299 {
+		if resp.StatusCode == http.StatusForbidden {
+			fmt.Fprintf(os.Stderr, "error: are your credentials correct?\n")
+		}
+		return resp, fmt.Errorf("gangway returned %d: %s", resp.StatusCode, resp.Status)
+	}
+
 	return resp, nil
 }
 
