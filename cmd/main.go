@@ -27,6 +27,7 @@ const maxJobs = 20
 type JobRunIdentifier struct {
 	JobName  string
 	JobRunID string
+	JobURL   string
 }
 
 type JobStatus struct {
@@ -139,6 +140,7 @@ var cmd = &cobra.Command{
 			jobRunIdentifier := JobRunIdentifier{
 				JobName:  opts.jobName,
 				JobRunID: jobStatus.BuildID,
+				JobURL:   jobStatus.JobURL,
 			}
 			jobRunIdentifiers = append(jobRunIdentifiers, jobRunIdentifier)
 
